@@ -6,7 +6,7 @@
 	encode gzip zstd
 
 	handle_path /images/* {
-		uri prepend /lumihoo-images
+		rewrite * /lumihoo-images{path}
 		reverse_proxy minio:9000 {
 			header_up Host {upstream_hostport}
 		}
