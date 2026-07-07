@@ -11,9 +11,6 @@ const hooversionConfig = {
       dependencies: [],
     },
   ],
-  hooks: {
-    afterVersion: ["pnpm install --lockfile-only"],
-  },
   github: {
     releases: true,
   },
