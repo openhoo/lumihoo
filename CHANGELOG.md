@@ -1,5 +1,11 @@
 # lumihoo Changelog
 
+## 0.1.2 (2026-07-07)
+
+### Bug Fixes
+
+- send Ideogram 4 JSON prompts (412b5ec)
+
 ## 0.1.1 (2026-07-07)
 
 ### Bug Fixes
