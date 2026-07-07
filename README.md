@@ -121,7 +121,7 @@ Released images are published to GitHub Container Registry:
 
 Commits to `main` are linted as Conventional Commits by Hooversion. After CI passes,
 the release workflow creates the release commit, tag, and GitHub release, then builds
-and pushes the multi-arch Docker image to GHCR.
+and pushes the linux/amd64 Docker image to GHCR.
 
 ## API
 
