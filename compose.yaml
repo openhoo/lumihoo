@@ -1,0 +1,82 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lumihoo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lumihoo}
+      POSTGRES_DB: ${POSTGRES_DB:-lumihoo}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - postgres-data:/var/lib/postgresql
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-lumihoo}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-lumihoo-secret}
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:-lumihoo}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:-lumihoo-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lumihoo-images}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"; do
+          sleep 2
+        done
+        mc mb --ignore-existing "local/$$MINIO_BUCKET"
+        mc anonymous set download "local/$$MINIO_BUCKET"
+
+  app:
+    build:
+      context: .
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgres://${POSTGRES_USER:-lumihoo}:${POSTGRES_PASSWORD:-lumihoo}@postgres:5432/${POSTGRES_DB:-lumihoo}}
+      MINIO_ENDPOINT: minio
+      MINIO_PORT: 9000
+      MINIO_USE_SSL: false
+      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:-lumihoo}
+      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:-lumihoo-secret}
+      MINIO_BUCKET: ${MINIO_BUCKET:-lumihoo-images}
+      PUBLIC_IMAGE_BASE_URL: /images
+      SGLANG_BASE_URL: ${SGLANG_BASE_URL:-http://host.docker.internal:30010/v1}
+      SGLANG_API_KEY: ${SGLANG_API_KEY:-EMPTY}
+      SGLANG_IMAGE_MODEL: ${SGLANG_IMAGE_MODEL:-ideogram-ai/ideogram-4-nf4}
+      SGLANG_TIMEOUT_MS: ${SGLANG_TIMEOUT_MS:-110000}
+      IDEOGRAM_PRESET: ${IDEOGRAM_PRESET:-V4_QUALITY_48}
+      IDEOGRAM_SIZE: ${IDEOGRAM_SIZE:-1024x1024}
+      IDEOGRAM_SEED: ${IDEOGRAM_SEED:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    extra_hosts:
+      - host.docker.internal:host-gateway
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      - app
+      - minio
+
+volumes:
+  postgres-data:
+  minio-data:

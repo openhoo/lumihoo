@@ -1,0 +1,18 @@
+{
+	admin off
+}
+
+:8080 {
+	encode gzip zstd
+
+	handle_path /images/* {
+		uri prepend /lumihoo-images
+		reverse_proxy minio:9000 {
+			header_up Host {upstream_hostport}
+		}
+	}
+
+	handle {
+		reverse_proxy app:3000
+	}
+}
