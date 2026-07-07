@@ -1,5 +1,11 @@
 # lumihoo Changelog
 
+## 0.1.3 (2026-07-07)
+
+### Bug Fixes
+
+- default ui to speed preset (d226855)
+
 ## 0.1.2 (2026-07-07)
 
 ### Bug Fixes
