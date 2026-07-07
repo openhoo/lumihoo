@@ -57,6 +57,7 @@ Set these environment variables as needed:
 | `SGLANG_TIMEOUT_MS` | `110000` | Request timeout in milliseconds. Clamped between 1000 and 300000. |
 | `IDEOGRAM_PRESET` | `V4_QUALITY_48` | Default preset. Supported values: `V4_DEFAULT_20`, `V4_QUALITY_48`, `V4_TURBO_12`. |
 | `IDEOGRAM_SIZE` | `1024x1024` | Default size. Supported values: `1024x1024`, `2048x2048`. |
+| `IDEOGRAM_JSON_PROMPT` | auto | Whether to wrap text prompts as Ideogram 4 structured JSON captions. Defaults to enabled when `SGLANG_IMAGE_MODEL` contains `ideogram` and `4`. Set to `false` for non-Ideogram-compatible upstreams. |
 | `IDEOGRAM_SEED` | unset | Optional non-negative integer seed. |
 
 ## Development
@@ -137,7 +138,7 @@ and pushes the linux/amd64 Docker image to GHCR.
 }
 ```
 
-The route validates prompt length, image count, preset, size, and seed before forwarding the request to the configured SGLang endpoint. Successful responses upload image bytes to MinIO, store metadata in Postgres, and return stable image URLs:
+The route validates prompt length, image count, preset, size, and seed before forwarding the request to the configured SGLang endpoint. For Ideogram 4 models, plain text prompts are converted to structured JSON captions before they are sent upstream; already-JSON prompts are passed through as minified JSON. Successful responses upload image bytes to MinIO, store metadata in Postgres, and return stable image URLs:
 
 ```json
 {

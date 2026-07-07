@@ -16,6 +16,7 @@ const SIZES = ['1024x1024', '2048x2048'] as const
 
 type SglangImage = {
   b64_json?: unknown
+  is_image_safe?: unknown
   url?: unknown
 }
 
@@ -28,6 +29,8 @@ type ImageBytes = {
   buffer: Buffer
   contentType: string
 }
+
+type PromptFormat = 'text' | 'ideogram-json'
 
 type RequestedValue<T extends string> =
   | {
@@ -101,6 +104,72 @@ function imageGenerationUrl() {
   return `${normalizeBaseUrl(process.env.SGLANG_BASE_URL)}/images/generations`
 }
 
+function booleanEnv(value: string | undefined) {
+  const normalized = value?.trim().toLowerCase()
+  if (!normalized) return undefined
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  return undefined
+}
+
+function shouldUseIdeogramJsonPrompt(model: string) {
+  const configured = booleanEnv(process.env.IDEOGRAM_JSON_PROMPT)
+  if (configured !== undefined) return configured
+
+  const normalizedModel = model.toLowerCase()
+  return normalizedModel.includes('ideogram') && normalizedModel.includes('4')
+}
+
+function greatestCommonDivisor(left: number, right: number): number {
+  return right === 0 ? left : greatestCommonDivisor(right, left % right)
+}
+
+function aspectRatioFromSize(size: string) {
+  const [width, height] = size.split('x').map(Number)
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
+    return '1:1'
+  }
+
+  const divisor = greatestCommonDivisor(width, height)
+  return `${width / divisor}:${height / divisor}`
+}
+
+function parseJsonObject(value: string) {
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null
+  } catch {
+    return null
+  }
+}
+
+function ideogramJsonPrompt(prompt: string, size: string) {
+  const parsedPrompt = parseJsonObject(prompt)
+  if (parsedPrompt) return JSON.stringify(parsedPrompt)
+
+  return JSON.stringify({
+    aspect_ratio: aspectRatioFromSize(size),
+    high_level_description: prompt,
+    compositional_deconstruction: {
+      background: 'The background, setting, lighting, and atmosphere should match the high-level description.',
+      elements: [
+        {
+          type: 'obj',
+          bbox: [0, 0, 1000, 1000],
+          desc: prompt,
+        },
+      ],
+    },
+  })
+}
+
+function upstreamPrompt(prompt: string, size: string, model: string): { format: PromptFormat; prompt: string } {
+  if (!shouldUseIdeogramJsonPrompt(model)) return { format: 'text', prompt }
+  return { format: 'ideogram-json', prompt: ideogramJsonPrompt(prompt, size) }
+}
+
 function upstreamMessage(payload: unknown) {
   if (payload && typeof payload === 'object') {
     const record = payload as Record<string, unknown>
@@ -123,6 +192,10 @@ async function readUpstreamError(res: Response) {
   const contentType = res.headers.get('content-type') || ''
   if (contentType.includes('application/json')) {
     const payload = await res.json().catch(() => null)
+    if (res.status === 422) {
+      return upstreamMessage(payload) || 'The image request was blocked by upstream safety checks.'
+    }
+
     return upstreamMessage(payload) || `SGLang returned ${res.status}.`
   }
 
@@ -135,7 +208,12 @@ async function imagesFromPayload(payload: SglangImageResponse, signal: AbortSign
 
   const images: ImageBytes[] = []
 
-  for (const image of payload.data as SglangImage[]) {
+  for (const item of payload.data) {
+    if (!item || typeof item !== 'object') continue
+
+    const image = item as SglangImage
+    if (image.is_image_safe === false) continue
+
     if (typeof image.b64_json === 'string') {
       const buffer = Buffer.from(image.b64_json, 'base64')
       if (buffer.length > 0) images.push({ buffer, contentType: 'image/png' })
@@ -153,6 +231,13 @@ async function imagesFromPayload(payload: SglangImageResponse, signal: AbortSign
   }
 
   return images
+}
+
+function hasUnsafeImage(payload: SglangImageResponse) {
+  return (
+    Array.isArray(payload.data) &&
+    payload.data.some((item) => Boolean(item) && typeof item === 'object' && (item as SglangImage).is_image_safe === false)
+  )
 }
 
 export async function POST(req: Request) {
@@ -184,13 +269,14 @@ export async function POST(req: Request) {
 
   const seed = requestedSeed.value ?? envSeed.value
   const model = process.env.SGLANG_IMAGE_MODEL?.trim() || DEFAULT_MODEL
+  const generatedPrompt = upstreamPrompt(prompt, size.value, model)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), timeoutMs())
 
   try {
     const upstreamBody: Record<string, unknown> = {
       model,
-      prompt,
+      prompt: generatedPrompt.prompt,
       n: count,
       size: size.value,
       response_format: 'b64_json',
@@ -218,7 +304,9 @@ export async function POST(req: Request) {
     const images = await imagesFromPayload(payload, controller.signal)
 
     if (images.length === 0) {
-      const message = upstreamMessage(payload) || 'SGLang did not return any images.'
+      const message = hasUnsafeImage(payload)
+        ? 'The image request was blocked by upstream safety checks.'
+        : upstreamMessage(payload) || 'SGLang did not return any images.'
       return Response.json({ error: message }, { status: 502 })
     }
 
@@ -239,6 +327,7 @@ export async function POST(req: Request) {
         preset: preset.value,
         size: size.value,
         seed: seed ?? null,
+        promptFormat: generatedPrompt.format,
       },
     })
   } catch (err) {
