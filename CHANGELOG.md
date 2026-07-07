@@ -1,5 +1,11 @@
 # lumihoo Changelog
 
+## 0.1.1 (2026-07-07)
+
+### Bug Fixes
+
+- publish amd64 container images (87889d2)
+
 ## 0.1.0 (2026-07-07)
 
 ### Features
@@ -10,5 +16,3 @@
 
 - repair ci type dependencies (e9aa1a9)
 - remove pnpm release hook (6b3a13c)
-
-
