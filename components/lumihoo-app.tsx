@@ -51,7 +51,7 @@ type ImageSize = (typeof SIZE_OPTIONS)[number]['value']
 export function LumihooApp() {
   const [prompt, setPrompt] = useState('')
   const [count, setCount] = useState(1)
-  const [preset, setPreset] = useState<IdeogramPreset>('V4_QUALITY_48')
+  const [preset, setPreset] = useState<IdeogramPreset>('V4_TURBO_12')
   const [size, setSize] = useState<ImageSize>('1024x1024')
   const [seed, setSeed] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
