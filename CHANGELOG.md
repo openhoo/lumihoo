@@ -1,5 +1,11 @@
 # lumihoo Changelog
 
+## 0.3.0 (2026-07-08)
+
+### Features
+
+- tune ideogram generation defaults (d6d2bcf)
+
 ## 0.2.1 (2026-07-08)
 
 ### Bug Fixes
