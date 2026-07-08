@@ -1,6 +1,6 @@
 {
   "name": "lumihoo",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Lumihoo by OpenHoo: a Next.js image generation web app for OpenAI-compatible SGLang image endpoints.",
   "license": "Apache-2.0",
   "private": true,

@@ -1,5 +1,11 @@
 # lumihoo Changelog
 
+## 0.3.1 (2026-07-08)
+
+### Bug Fixes
+
+- configure Open WebUI vLLM proxy (c1a684f)
+
 ## 0.3.0 (2026-07-08)
 
 ### Features
