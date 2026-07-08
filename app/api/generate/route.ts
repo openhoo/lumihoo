@@ -4,6 +4,7 @@ import {
   ModelProfileConfigError,
   sizeLabel,
   type ModelProfile,
+  type ModelStylePreset,
   type PromptFormat,
 } from '@/lib/model-profiles'
 
@@ -76,20 +77,6 @@ function optionalSeed(value: unknown) {
   return { error: 'Seed must be a non-negative integer.' }
 }
 
-function greatestCommonDivisor(left: number, right: number): number {
-  return right === 0 ? left : greatestCommonDivisor(right, left % right)
-}
-
-function aspectRatioFromSize(size: string) {
-  const [width, height] = size.split('x').map(Number)
-  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0) {
-    return '1:1'
-  }
-
-  const divisor = greatestCommonDivisor(width, height)
-  return `${width / divisor}:${height / divisor}`
-}
-
 function parseJsonObject(value: string) {
   try {
     const parsed = JSON.parse(value)
@@ -101,12 +88,81 @@ function parseJsonObject(value: string) {
   }
 }
 
-function ideogramJsonPrompt(prompt: string, size: string) {
-  const parsedPrompt = parseJsonObject(prompt)
-  if (parsedPrompt) return JSON.stringify(parsedPrompt)
+function stylePromptText(stylePreset: ModelStylePreset | null) {
+  return stylePreset?.prompt.trim() || ''
+}
 
-  return JSON.stringify({
-    aspect_ratio: aspectRatioFromSize(size),
+function styleInstruction(prompt: string, stylePreset: ModelStylePreset | null) {
+  const stylePrompt = stylePromptText(stylePreset)
+  return stylePrompt ? `${prompt}\n\nStyle preset: ${stylePrompt}` : prompt
+}
+
+function orderedObject(value: Record<string, unknown>, preferredKeys: readonly string[]) {
+  const ordered: Record<string, unknown> = {}
+
+  for (const key of preferredKeys) {
+    if (value[key] !== undefined) ordered[key] = value[key]
+  }
+
+  for (const [key, item] of Object.entries(value)) {
+    if (ordered[key] === undefined) ordered[key] = item
+  }
+
+  return ordered
+}
+
+function orderedStyleDescription(value: Record<string, unknown>) {
+  const preferredKeys = value.art_style !== undefined && value.photo === undefined
+    ? ['aesthetics', 'lighting', 'medium', 'art_style', 'color_palette']
+    : ['aesthetics', 'lighting', 'photo', 'medium', 'color_palette']
+
+  return orderedObject(value, preferredKeys)
+}
+
+function orderedIdeogramPrompt(value: Record<string, unknown>) {
+  return orderedObject(value, [
+    'high_level_description',
+    'style_description',
+    'compositional_deconstruction',
+  ])
+}
+
+function applyStylePresetToJsonPrompt(
+  promptObject: Record<string, unknown>,
+  stylePreset: ModelStylePreset | null,
+) {
+  if (!stylePreset) return orderedIdeogramPrompt(promptObject)
+
+  const stylePrompt = stylePromptText(stylePreset)
+  const presetStyle = stylePreset.styleDescription
+  if (!presetStyle && !stylePrompt) return orderedIdeogramPrompt(promptObject)
+
+  const existingStyle = getBodyObject(promptObject.style_description) || {}
+  const nextStyleDescription: Record<string, unknown> = {
+    ...(presetStyle || {}),
+    ...existingStyle,
+  }
+
+  if (
+    stylePrompt &&
+    nextStyleDescription.aesthetics === undefined &&
+    nextStyleDescription.art_style === undefined &&
+    nextStyleDescription.photo === undefined
+  ) {
+    nextStyleDescription.aesthetics = stylePrompt
+  }
+
+  return orderedIdeogramPrompt({
+    ...promptObject,
+    style_description: orderedStyleDescription(nextStyleDescription),
+  })
+}
+
+function ideogramJsonPrompt(prompt: string, stylePreset: ModelStylePreset | null) {
+  const parsedPrompt = parseJsonObject(prompt)
+  if (parsedPrompt) return JSON.stringify(applyStylePresetToJsonPrompt(parsedPrompt, stylePreset))
+
+  const promptObject = {
     high_level_description: prompt,
     compositional_deconstruction: {
       background: 'The background, setting, lighting, and atmosphere should match the high-level description.',
@@ -118,12 +174,18 @@ function ideogramJsonPrompt(prompt: string, size: string) {
         },
       ],
     },
-  })
+  }
+
+  return JSON.stringify(applyStylePresetToJsonPrompt(promptObject, stylePreset))
 }
 
-function upstreamPrompt(prompt: string, size: string, format: PromptFormat): { format: PromptFormat; prompt: string } {
-  if (format === 'text') return { format: 'text', prompt }
-  return { format: 'ideogram-json', prompt: ideogramJsonPrompt(prompt, size) }
+function upstreamPrompt(
+  prompt: string,
+  format: PromptFormat,
+  stylePreset: ModelStylePreset | null,
+): { format: PromptFormat; prompt: string } {
+  if (format === 'text') return { format: 'text', prompt: styleInstruction(prompt, stylePreset) }
+  return { format: 'ideogram-json', prompt: ideogramJsonPrompt(prompt, stylePreset) }
 }
 
 function upstreamMessage(payload: unknown) {
@@ -228,6 +290,30 @@ function requestedPreset(profile: ModelProfile, value: unknown): RequestedValue<
   )
 }
 
+function requestedStylePreset(profile: ModelProfile, value: unknown): RequestedValue<ModelStylePreset | null> {
+  if (profile.stylePresets.length === 0) {
+    if (value === undefined || value === null || value === '') return { ok: true, value: null }
+
+    return {
+      ok: false,
+      error: 'Style preset is not supported by the active model profile.',
+    }
+  }
+
+  const selected = requestedAllowedValue(
+    'Style preset',
+    value,
+    profile.stylePresets.map((stylePreset) => stylePreset.value),
+    profile.defaultStylePreset || profile.stylePresets[0].value,
+  )
+  if (!selected.ok) return selected
+
+  return {
+    ok: true,
+    value: profile.stylePresets.find((stylePreset) => stylePreset.value === selected.value) || null,
+  }
+}
+
 function controlsResponse(profile: ModelProfile) {
   return {
     count: {
@@ -236,6 +322,8 @@ function controlsResponse(profile: ModelProfile) {
     },
     presets: profile.presets,
     defaultPreset: profile.defaultPreset,
+    stylePresets: profile.stylePresets.map(({ value, label }) => ({ value, label })),
+    defaultStylePreset: profile.defaultStylePreset,
     sizes: profile.sizes.map((size) => ({ value: size, label: sizeLabel(size) })),
     defaultSize: profile.defaultSize,
     seed: {
@@ -275,6 +363,9 @@ export async function POST(req: Request) {
   const preset = requestedPreset(profile, body.preset)
   if (!preset.ok) return Response.json({ error: preset.error }, { status: 400 })
 
+  const stylePreset = requestedStylePreset(profile, body.stylePreset)
+  if (!stylePreset.ok) return Response.json({ error: stylePreset.error }, { status: 400 })
+
   const size = requestedAllowedValue('Size', body.size, profile.sizes, profile.defaultSize)
   if (!size.ok) return Response.json({ error: size.error }, { status: 400 })
 
@@ -282,7 +373,7 @@ export async function POST(req: Request) {
   if (requestedSeed.error) return Response.json({ error: requestedSeed.error }, { status: 400 })
 
   const seed = requestedSeed.value ?? profile.defaultSeed
-  const generatedPrompt = upstreamPrompt(prompt, size.value, profile.promptFormat)
+  const generatedPrompt = upstreamPrompt(prompt, profile.promptFormat, stylePreset.value)
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), profile.timeoutMs)
 
@@ -341,6 +432,7 @@ export async function POST(req: Request) {
         profileId: profile.id,
         model: profile.model,
         preset: preset.value,
+        stylePreset: stylePreset.value?.value ?? null,
         size: size.value,
         seed: seed ?? null,
         promptFormat: generatedPrompt.format,

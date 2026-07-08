@@ -5,7 +5,8 @@ Lumihoo is a polished image generation interface for OpenHoo. It lets users turn
 ## Features
 
 - Prompt-driven image generation with one to four outputs.
-- Preset controls for quality, default, and turbo generation modes.
+- Preset controls for turbo, balanced, and quality generation modes.
+- Configurable style presets that are injected into upstream prompts.
 - 1024 and 2048 square image sizes.
 - Optional deterministic seed input.
 - Result gallery, lightbox preview, image download, and share actions.
@@ -55,10 +56,11 @@ Set these environment variables as needed:
 | `SGLANG_API_KEY` | `EMPTY` | Bearer token sent to the upstream endpoint. |
 | `SGLANG_IMAGE_MODEL` | `ideogram-ai/ideogram-4-nf4` | Image model name passed to the upstream API. |
 | `SGLANG_TIMEOUT_MS` | `110000` | Request timeout in milliseconds. Clamped between 1000 and 300000. |
-| `IDEOGRAM_PRESET` | `V4_QUALITY_48` | Default preset. Supported values: `V4_DEFAULT_20`, `V4_QUALITY_48`, `V4_TURBO_12`. |
+| `IDEOGRAM_PRESET` | `V4_DEFAULT_20` | Default preset. Supported values: `V4_TURBO_12`, `V4_DEFAULT_20`, `V4_QUALITY_48`. |
 | `IDEOGRAM_SIZE` | `1024x1024` | Default size. Supported values: `1024x1024`, `2048x2048`. |
 | `IDEOGRAM_JSON_PROMPT` | auto | Whether to wrap text prompts as Ideogram 4 structured JSON captions. Defaults to enabled when `SGLANG_IMAGE_MODEL` contains `ideogram` and `4`. Set to `false` for non-Ideogram-compatible upstreams. |
 | `IDEOGRAM_SEED` | unset | Optional non-negative integer seed. |
+| `LUMIHOO_STYLE_PRESET` | `natural` | Default style preset for the legacy profile. Built-in values are `natural`, `photoreal`, `cinematic`, `graphic-poster`, `studio-product`, and `isometric-3d`. |
 | `LUMIHOO_MODEL_PROFILES` | unset | Optional JSON object defining model profiles. When set, it replaces the legacy single-model `SGLANG_IMAGE_MODEL`/`IDEOGRAM_*` profile behavior. |
 | `LUMIHOO_MODEL_PROFILE` | unset | Optional active profile id override. Defaults to `activeProfile` in `LUMIHOO_MODEL_PROFILES`, then the first configured profile. |
 
@@ -67,7 +69,8 @@ Set these environment variables as needed:
 Use `LUMIHOO_MODEL_PROFILES` when different upstream models need different request
 shapes. Profiles are server-side deployment config; users do not choose models in the
 UI. The active profile controls the model, endpoint, prompt format, timeout, supported
-sizes, preset menu, default seed, and extra upstream request fields.
+sizes, sampler preset menu, style preset menu, default seed, and extra upstream request
+fields.
 
 ```json
 {
@@ -84,11 +87,31 @@ sizes, preset menu, default seed, and extra upstream request fields.
       "sizes": ["1024x1024", "2048x2048"],
       "defaultSize": "1024x1024",
       "presets": [
-        { "value": "V4_QUALITY_48", "label": "Quality" },
-        { "value": "V4_DEFAULT_20", "label": "Default" },
-        { "value": "V4_TURBO_12", "label": "Turbo" }
+        { "value": "V4_TURBO_12", "label": "Turbo" },
+        { "value": "V4_DEFAULT_20", "label": "Balanced" },
+        { "value": "V4_QUALITY_48", "label": "Quality" }
       ],
-      "defaultPreset": "V4_QUALITY_48",
+      "defaultPreset": "V4_DEFAULT_20",
+      "stylePresets": [
+        {
+          "value": "natural",
+          "label": "Natural",
+          "prompt": ""
+        },
+        {
+          "value": "brand-poster",
+          "label": "Brand Poster",
+          "prompt": "Bold graphic poster treatment with clear hierarchy, readable typography, limited spot colors, subtle print grain, and balanced negative space.",
+          "styleDescription": {
+            "aesthetics": "bold, graphic, high contrast, readable",
+            "lighting": "flat even print lighting",
+            "medium": "graphic_design",
+            "art_style": "screenprint poster, bold display type, limited spot-color palette, subtle paper grain",
+            "color_palette": ["#101114", "#F4EEE0", "#E34F35", "#1D8A99", "#F2B84B"]
+          }
+        }
+      ],
+      "defaultStylePreset": "natural",
       "extraBody": {}
     },
     {
@@ -101,6 +124,7 @@ sizes, preset menu, default seed, and extra upstream request fields.
       "sizes": ["1024x1024"],
       "defaultSize": "1024x1024",
       "presets": [],
+      "stylePresets": [],
       "extraBody": { "quality": "high" }
     }
   ]
@@ -109,10 +133,34 @@ sizes, preset menu, default seed, and extra upstream request fields.
 
 Supported `promptFormat` values are `text`, `ideogram-json`, and `auto`. Profiles with
 an empty `presets` array hide the preset control and omit `preset` from upstream
-requests. `extraBody` cannot define reserved request keys: `model`, `prompt`, `n`,
+requests. Profiles with an empty `stylePresets` array hide the style control. For
+`ideogram-json` profiles, selected styles are merged into `style_description`; for
+`text` profiles, selected styles are appended to the text prompt as a compact style
+instruction. `extraBody` cannot define reserved request keys: `model`, `prompt`, `n`,
 `size`, `response_format`, `preset`, or `seed`.
 
 Curated profile examples live in `model-profiles/`.
+
+### Ideogram 4 settings
+
+The default Ideogram 4 profile is tuned for interactive speed without dropping to draft
+quality:
+
+| Use case | Preset | Size | Notes |
+| --- | --- | --- | --- |
+| Fast drafts | `V4_TURBO_12` | `1024x1024` | Lowest latency. Use for exploration when detail is less important. |
+| Normal app generation | `V4_DEFAULT_20` | `1024x1024` | Recommended default. About 40% of the quality preset steps with the same guidance shape. |
+| Final-quality assets | `V4_QUALITY_48` | `2048x2048` | Highest fidelity. Use when waiting longer is acceptable. |
+
+For Ideogram 4 JSON prompts, Lumihoo keeps prompt content in the documented V4 caption
+contract and sends output dimensions through the upstream `size` field. Style presets are
+merged into `style_description`; user-supplied JSON prompt fields win over preset fields.
+
+Batching is per prompt: the app sends one upstream `/images/generations` request with
+`n` equal to the selected count, then stores every safe returned image. Keep this path for
+same-prompt variants because it lets the backend batch the work and gives one timeout,
+one error response, and one storage transaction. Split into separate requests only when
+prompts, sizes, presets, or seeds differ.
 
 #### Krea 2 Turbo
 
@@ -213,13 +261,20 @@ and pushes the linux/amd64 Docker image to GHCR.
 {
   "prompt": "a great horned owl made of constellations",
   "count": 1,
-  "preset": "V4_QUALITY_48",
+  "preset": "V4_DEFAULT_20",
+  "stylePreset": "cinematic",
   "size": "1024x1024",
   "seed": 12345
 }
 ```
 
-The route validates prompt length, image count, active-profile preset, active-profile size, and seed before forwarding the request to the configured SGLang endpoint. For `ideogram-json` profiles, plain text prompts are converted to structured JSON captions before they are sent upstream; already-JSON prompts are passed through as minified JSON. Successful responses upload image bytes to MinIO, store metadata in Postgres, and return stable image URLs:
+The route validates prompt length, image count, active-profile preset, active-profile
+style preset, active-profile size, and seed before forwarding the request to the
+configured SGLang endpoint. For `ideogram-json` profiles, plain text prompts are
+converted to structured JSON captions before they are sent upstream; already-JSON
+prompts are passed through as minified JSON with the selected style merged into
+`style_description`. Successful responses upload image bytes to MinIO, store metadata
+in Postgres, and return stable image URLs:
 
 ```json
 {

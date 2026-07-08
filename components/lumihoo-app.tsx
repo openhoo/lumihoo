@@ -12,6 +12,7 @@ import {
   Gauge,
   Hash,
   Images,
+  Palette,
   Ruler,
   Share2,
   Sparkles,
@@ -44,6 +45,8 @@ type GenerationControls = {
   }
   presets: GenerationOption[]
   defaultPreset: string | null
+  stylePresets: GenerationOption[]
+  defaultStylePreset: string | null
   sizes: GenerationOption[]
   defaultSize: string
   seed: {
@@ -56,14 +59,23 @@ type GenerationControls = {
 const COUNTS = [1, 2, 3, 4]
 
 const PRESET_OPTIONS = [
-  { value: 'V4_QUALITY_48', label: 'Quality' },
-  { value: 'V4_DEFAULT_20', label: 'Default' },
   { value: 'V4_TURBO_12', label: 'Turbo' },
+  { value: 'V4_DEFAULT_20', label: 'Balanced' },
+  { value: 'V4_QUALITY_48', label: 'Quality' },
 ] as const
 
 const SIZE_OPTIONS = [
   { value: '1024x1024', label: '1024' },
   { value: '2048x2048', label: '2048' },
+] as const
+
+const STYLE_PRESET_OPTIONS = [
+  { value: 'natural', label: 'Natural' },
+  { value: 'photoreal', label: 'Photoreal' },
+  { value: 'cinematic', label: 'Cinematic' },
+  { value: 'graphic-poster', label: 'Poster' },
+  { value: 'studio-product', label: 'Product' },
+  { value: 'isometric-3d', label: '3D Icon' },
 ] as const
 
 const FALLBACK_CONTROLS: GenerationControls = {
@@ -72,7 +84,9 @@ const FALLBACK_CONTROLS: GenerationControls = {
     default: 1,
   },
   presets: PRESET_OPTIONS.map((option) => ({ ...option })),
-  defaultPreset: 'V4_QUALITY_48',
+  defaultPreset: 'V4_DEFAULT_20',
+  stylePresets: STYLE_PRESET_OPTIONS.map((option) => ({ ...option })),
+  defaultStylePreset: 'natural',
   sizes: SIZE_OPTIONS.map((option) => ({ ...option })),
   defaultSize: '1024x1024',
   seed: {
@@ -111,6 +125,14 @@ function normalizeControls(value: unknown): GenerationControls | null {
 
   const defaultPreset = typeof value.defaultPreset === 'string' ? value.defaultPreset : null
   if (defaultPreset && !presets.some((presetOption) => presetOption.value === defaultPreset)) return null
+  const stylePresets = normalizeOptions(value.stylePresets)
+  const defaultStylePreset = typeof value.defaultStylePreset === 'string' ? value.defaultStylePreset : null
+  if (
+    defaultStylePreset &&
+    !stylePresets.some((stylePresetOption) => stylePresetOption.value === defaultStylePreset)
+  ) {
+    return null
+  }
 
   const countRecord = isRecord(value.count) ? value.count : null
   const countValues = Array.isArray(countRecord?.values)
@@ -136,6 +158,8 @@ function normalizeControls(value: unknown): GenerationControls | null {
     },
     presets,
     defaultPreset,
+    stylePresets,
+    defaultStylePreset,
     sizes,
     defaultSize,
     seed: {
@@ -151,6 +175,7 @@ export function LumihooApp() {
   const [prompt, setPrompt] = useState('')
   const [count, setCount] = useState(FALLBACK_CONTROLS.count.default)
   const [preset, setPreset] = useState<string | null>(FALLBACK_CONTROLS.defaultPreset)
+  const [stylePreset, setStylePreset] = useState<string | null>(FALLBACK_CONTROLS.defaultStylePreset)
   const [size, setSize] = useState(FALLBACK_CONTROLS.defaultSize)
   const [seed, setSeed] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
@@ -179,6 +204,11 @@ export function LumihooApp() {
           current && nextControls.presets.some((option) => option.value === current)
             ? current
             : nextControls.defaultPreset
+        ))
+        setStylePreset((current) => (
+          current && nextControls.stylePresets.some((option) => option.value === current)
+            ? current
+            : nextControls.defaultStylePreset
         ))
         setSize((current) => (
           nextControls.sizes.some((option) => option.value === current)
@@ -213,6 +243,7 @@ export function LumihooApp() {
         seed: seed.trim() ? Number(seed) : undefined,
       }
       if (preset) requestBody.preset = preset
+      if (stylePreset) requestBody.stylePreset = stylePreset
 
       const res = await fetch('/api/generate', {
         method: 'POST',
@@ -262,7 +293,7 @@ export function LumihooApp() {
     } finally {
       setIsGenerating(false)
     }
-  }, [prompt, count, preset, size, seed, isGenerating])
+  }, [prompt, count, preset, stylePreset, size, seed, isGenerating])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -311,6 +342,16 @@ export function LumihooApp() {
                   value={preset}
                   options={controls.presets}
                   onChange={(value) => setPreset(value)}
+                  disabled={isGenerating}
+                />
+              )}
+              {controls.stylePresets.length > 0 && stylePreset && (
+                <OptionMenu
+                  label="Style"
+                  icon={Palette}
+                  value={stylePreset}
+                  options={controls.stylePresets}
+                  onChange={(value) => setStylePreset(value)}
                   disabled={isGenerating}
                 />
               )}
