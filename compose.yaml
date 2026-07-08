@@ -59,6 +59,8 @@ services:
       IDEOGRAM_PRESET: ${IDEOGRAM_PRESET:-V4_QUALITY_48}
       IDEOGRAM_SIZE: ${IDEOGRAM_SIZE:-1024x1024}
       IDEOGRAM_SEED: ${IDEOGRAM_SEED:-}
+      LUMIHOO_MODEL_PROFILE: ${LUMIHOO_MODEL_PROFILE:-}
+      LUMIHOO_MODEL_PROFILES: ${LUMIHOO_MODEL_PROFILES:-}
     depends_on:
       postgres:
         condition: service_healthy

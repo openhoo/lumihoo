@@ -59,6 +59,87 @@ Set these environment variables as needed:
 | `IDEOGRAM_SIZE` | `1024x1024` | Default size. Supported values: `1024x1024`, `2048x2048`. |
 | `IDEOGRAM_JSON_PROMPT` | auto | Whether to wrap text prompts as Ideogram 4 structured JSON captions. Defaults to enabled when `SGLANG_IMAGE_MODEL` contains `ideogram` and `4`. Set to `false` for non-Ideogram-compatible upstreams. |
 | `IDEOGRAM_SEED` | unset | Optional non-negative integer seed. |
+| `LUMIHOO_MODEL_PROFILES` | unset | Optional JSON object defining model profiles. When set, it replaces the legacy single-model `SGLANG_IMAGE_MODEL`/`IDEOGRAM_*` profile behavior. |
+| `LUMIHOO_MODEL_PROFILE` | unset | Optional active profile id override. Defaults to `activeProfile` in `LUMIHOO_MODEL_PROFILES`, then the first configured profile. |
+
+### Model profiles
+
+Use `LUMIHOO_MODEL_PROFILES` when different upstream models need different request
+shapes. Profiles are server-side deployment config; users do not choose models in the
+UI. The active profile controls the model, endpoint, prompt format, timeout, supported
+sizes, preset menu, default seed, and extra upstream request fields.
+
+```json
+{
+  "activeProfile": "ideogram-v4",
+  "profiles": [
+    {
+      "id": "ideogram-v4",
+      "label": "Ideogram 4",
+      "baseUrl": "http://localhost:30010/v1",
+      "apiKeyEnv": "SGLANG_API_KEY",
+      "model": "ideogram-ai/ideogram-4-nf4",
+      "promptFormat": "ideogram-json",
+      "timeoutMs": 110000,
+      "sizes": ["1024x1024", "2048x2048"],
+      "defaultSize": "1024x1024",
+      "presets": [
+        { "value": "V4_QUALITY_48", "label": "Quality" },
+        { "value": "V4_DEFAULT_20", "label": "Default" },
+        { "value": "V4_TURBO_12", "label": "Turbo" }
+      ],
+      "defaultPreset": "V4_QUALITY_48",
+      "extraBody": {}
+    },
+    {
+      "id": "plain-image-model",
+      "label": "Plain image model",
+      "baseUrl": "http://localhost:30011/v1",
+      "apiKeyEnv": "SGLANG_API_KEY",
+      "model": "example/image-model",
+      "promptFormat": "text",
+      "sizes": ["1024x1024"],
+      "defaultSize": "1024x1024",
+      "presets": [],
+      "extraBody": { "quality": "high" }
+    }
+  ]
+}
+```
+
+Supported `promptFormat` values are `text`, `ideogram-json`, and `auto`. Profiles with
+an empty `presets` array hide the preset control and omit `preset` from upstream
+requests. `extraBody` cannot define reserved request keys: `model`, `prompt`, `n`,
+`size`, `response_format`, `preset`, or `seed`.
+
+Curated profile examples live in `model-profiles/`.
+
+#### Krea 2 Turbo
+
+Krea 2 Turbo is the recommended Krea 2 inference profile. It uses the SGLang
+OpenAI-compatible images endpoint with model `krea/Krea-2-Turbo`, plain text prompts,
+8 inference steps, no preset field, and square 1k-2k output sizes.
+
+Start SGLang:
+
+```bash
+SGLANG_CACHE_DIT_ENABLED=true sglang serve \
+  --model-path krea/Krea-2-Turbo \
+  --num-gpus 1 \
+  --port 30000
+```
+
+Load the profile for local development:
+
+```bash
+export LUMIHOO_MODEL_PROFILES="$(tr -d '\n' < model-profiles/krea-2-turbo.json)"
+export SGLANG_API_KEY=EMPTY
+pnpm dev
+```
+
+For Docker Compose, edit the profile `baseUrl` to
+`http://host.docker.internal:30000/v1` before setting `LUMIHOO_MODEL_PROFILES`, or run
+SGLang as a Compose service on the same Docker network.
 
 ## Development
 
@@ -138,7 +219,7 @@ and pushes the linux/amd64 Docker image to GHCR.
 }
 ```
 
-The route validates prompt length, image count, preset, size, and seed before forwarding the request to the configured SGLang endpoint. For Ideogram 4 models, plain text prompts are converted to structured JSON captions before they are sent upstream; already-JSON prompts are passed through as minified JSON. Successful responses upload image bytes to MinIO, store metadata in Postgres, and return stable image URLs:
+The route validates prompt length, image count, active-profile preset, active-profile size, and seed before forwarding the request to the configured SGLang endpoint. For `ideogram-json` profiles, plain text prompts are converted to structured JSON captions before they are sent upstream; already-JSON prompts are passed through as minified JSON. Successful responses upload image bytes to MinIO, store metadata in Postgres, and return stable image URLs:
 
 ```json
 {

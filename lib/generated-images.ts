@@ -12,8 +12,9 @@ type ImageInput = {
 type StoreGeneratedImagesInput = {
   images: ImageInput[]
   prompt: string
+  profileId: string
   model: string
-  preset: string
+  preset: string | null
   imageSize: string
   seed?: number
 }
@@ -169,8 +170,9 @@ export async function storeGeneratedImages(input: StoreGeneratedImagesInput) {
       publicUrl: publicImageUrl(objectKey),
       contentType,
       sizeBytes: image.buffer.length,
+      profileId: input.profileId,
       model: input.model,
-      preset: input.preset,
+      preset: input.preset ?? null,
       imageSize: input.imageSize,
       seed: input.seed,
       etag: null,

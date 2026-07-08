@@ -1,18 +1,17 @@
 import { storeGeneratedImages } from '@/lib/generated-images'
+import {
+  getActiveModelProfile,
+  ModelProfileConfigError,
+  sizeLabel,
+  type ModelProfile,
+  type PromptFormat,
+} from '@/lib/model-profiles'
 
 export const runtime = 'nodejs'
 export const maxDuration = 120
 
-const DEFAULT_SGLANG_BASE_URL = 'http://localhost:30010/v1'
-const DEFAULT_MODEL = 'ideogram-ai/ideogram-4-nf4'
-const DEFAULT_PRESET = 'V4_QUALITY_48'
-const DEFAULT_SIZE = '1024x1024'
-const DEFAULT_TIMEOUT_MS = 110_000
 const MAX_IMAGES = 4
 const MAX_PROMPT_LENGTH = 2000
-
-const PRESETS = ['V4_DEFAULT_20', 'V4_QUALITY_48', 'V4_TURBO_12'] as const
-const SIZES = ['1024x1024', '2048x2048'] as const
 
 type SglangImage = {
   b64_json?: unknown
@@ -30,9 +29,7 @@ type ImageBytes = {
   contentType: string
 }
 
-type PromptFormat = 'text' | 'ideogram-json'
-
-type RequestedValue<T extends string> =
+type RequestedValue<T> =
   | {
       ok: true
       value: T
@@ -53,30 +50,15 @@ function clampImageCount(value: unknown) {
   return Math.min(Math.max(count, 1), MAX_IMAGES)
 }
 
-function normalizeBaseUrl(value: string | undefined) {
-  const trimmed = (value || DEFAULT_SGLANG_BASE_URL).trim().replace(/\/+$/, '')
-  return trimmed.endsWith('/v1') ? trimmed : `${trimmed}/v1`
-}
-
-function allowedValue<T extends readonly string[]>(
-  value: unknown,
-  allowed: T,
-  fallback: T[number],
-): T[number] {
-  return typeof value === 'string' && allowed.includes(value as T[number])
-    ? (value as T[number])
-    : fallback
-}
-
-function requestedAllowedValue<T extends readonly string[]>(
+function requestedAllowedValue<T extends string>(
   name: string,
   value: unknown,
-  allowed: T,
-  fallback: T[number],
-) : RequestedValue<T[number]> {
+  allowed: readonly T[],
+  fallback: T,
+): RequestedValue<T> {
   if (value === undefined || value === null || value === '') return { ok: true, value: fallback }
-  if (typeof value === 'string' && allowed.includes(value as T[number])) {
-    return { ok: true, value: value as T[number] }
+  if (typeof value === 'string' && allowed.includes(value as T)) {
+    return { ok: true, value: value as T }
   }
 
   return {
@@ -92,32 +74,6 @@ function optionalSeed(value: unknown) {
   if (Number.isSafeInteger(seed) && seed >= 0) return { value: seed }
 
   return { error: 'Seed must be a non-negative integer.' }
-}
-
-function timeoutMs() {
-  const value = Number(process.env.SGLANG_TIMEOUT_MS)
-  if (!Number.isFinite(value) || value <= 0) return DEFAULT_TIMEOUT_MS
-  return Math.min(Math.max(value, 1_000), 300_000)
-}
-
-function imageGenerationUrl() {
-  return `${normalizeBaseUrl(process.env.SGLANG_BASE_URL)}/images/generations`
-}
-
-function booleanEnv(value: string | undefined) {
-  const normalized = value?.trim().toLowerCase()
-  if (!normalized) return undefined
-  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
-  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
-  return undefined
-}
-
-function shouldUseIdeogramJsonPrompt(model: string) {
-  const configured = booleanEnv(process.env.IDEOGRAM_JSON_PROMPT)
-  if (configured !== undefined) return configured
-
-  const normalizedModel = model.toLowerCase()
-  return normalizedModel.includes('ideogram') && normalizedModel.includes('4')
 }
 
 function greatestCommonDivisor(left: number, right: number): number {
@@ -165,8 +121,8 @@ function ideogramJsonPrompt(prompt: string, size: string) {
   })
 }
 
-function upstreamPrompt(prompt: string, size: string, model: string): { format: PromptFormat; prompt: string } {
-  if (!shouldUseIdeogramJsonPrompt(model)) return { format: 'text', prompt }
+function upstreamPrompt(prompt: string, size: string, format: PromptFormat): { format: PromptFormat; prompt: string } {
+  if (format === 'text') return { format: 'text', prompt }
   return { format: 'ideogram-json', prompt: ideogramJsonPrompt(prompt, size) }
 }
 
@@ -240,7 +196,68 @@ function hasUnsafeImage(payload: SglangImageResponse) {
   )
 }
 
+function activeProfileOrResponse() {
+  try {
+    return { profile: getActiveModelProfile() }
+  } catch (err) {
+    if (err instanceof ModelProfileConfigError) {
+      return {
+        response: Response.json({ error: err.message }, { status: 500 }),
+      }
+    }
+
+    throw err
+  }
+}
+
+function requestedPreset(profile: ModelProfile, value: unknown): RequestedValue<string | null> {
+  if (profile.presets.length === 0) {
+    if (value === undefined || value === null || value === '') return { ok: true, value: null }
+
+    return {
+      ok: false,
+      error: 'Preset is not supported by the active model profile.',
+    }
+  }
+
+  return requestedAllowedValue(
+    'Preset',
+    value,
+    profile.presets.map((preset) => preset.value),
+    profile.defaultPreset || profile.presets[0].value,
+  )
+}
+
+function controlsResponse(profile: ModelProfile) {
+  return {
+    count: {
+      values: Array.from({ length: MAX_IMAGES }, (_, index) => index + 1),
+      default: 1,
+    },
+    presets: profile.presets,
+    defaultPreset: profile.defaultPreset,
+    sizes: profile.sizes.map((size) => ({ value: size, label: sizeLabel(size) })),
+    defaultSize: profile.defaultSize,
+    seed: {
+      supported: true,
+      default: profile.defaultSeed ?? null,
+    },
+    maxPromptLength: MAX_PROMPT_LENGTH,
+  }
+}
+
+export function GET() {
+  const active = activeProfileOrResponse()
+  if (active.response) return active.response
+
+  return Response.json(controlsResponse(active.profile))
+}
+
 export async function POST(req: Request) {
+  const active = activeProfileOrResponse()
+  if (active.response) return active.response
+
+  const profile = active.profile
   const parsedBody = await req.json().catch(() => null)
   const body = getBodyObject(parsedBody)
 
@@ -255,41 +272,38 @@ export async function POST(req: Request) {
     return Response.json({ error: 'Please provide a valid prompt.' }, { status: 400 })
   }
 
-  const envPreset = allowedValue(process.env.IDEOGRAM_PRESET, PRESETS, DEFAULT_PRESET)
-  const preset = requestedAllowedValue('Preset', body.preset, PRESETS, envPreset)
+  const preset = requestedPreset(profile, body.preset)
   if (!preset.ok) return Response.json({ error: preset.error }, { status: 400 })
 
-  const envSize = allowedValue(process.env.IDEOGRAM_SIZE, SIZES, DEFAULT_SIZE)
-  const size = requestedAllowedValue('Size', body.size, SIZES, envSize)
+  const size = requestedAllowedValue('Size', body.size, profile.sizes, profile.defaultSize)
   if (!size.ok) return Response.json({ error: size.error }, { status: 400 })
 
-  const envSeed = optionalSeed(process.env.IDEOGRAM_SEED)
   const requestedSeed = optionalSeed(body.seed)
   if (requestedSeed.error) return Response.json({ error: requestedSeed.error }, { status: 400 })
 
-  const seed = requestedSeed.value ?? envSeed.value
-  const model = process.env.SGLANG_IMAGE_MODEL?.trim() || DEFAULT_MODEL
-  const generatedPrompt = upstreamPrompt(prompt, size.value, model)
+  const seed = requestedSeed.value ?? profile.defaultSeed
+  const generatedPrompt = upstreamPrompt(prompt, size.value, profile.promptFormat)
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), timeoutMs())
+  const timeout = setTimeout(() => controller.abort(), profile.timeoutMs)
 
   try {
     const upstreamBody: Record<string, unknown> = {
-      model,
+      ...profile.extraBody,
+      model: profile.model,
       prompt: generatedPrompt.prompt,
       n: count,
       size: size.value,
       response_format: 'b64_json',
-      preset: preset.value,
     }
 
+    if (preset.value) upstreamBody.preset = preset.value
     if (seed !== undefined) upstreamBody.seed = seed
 
-    const res = await fetch(imageGenerationUrl(), {
+    const res = await fetch(`${profile.baseUrl}/images/generations`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        Authorization: `Bearer ${process.env.SGLANG_API_KEY || 'EMPTY'}`,
+        Authorization: `Bearer ${profile.apiKey}`,
       },
       body: JSON.stringify(upstreamBody),
       signal: controller.signal,
@@ -313,7 +327,8 @@ export async function POST(req: Request) {
     const items = await storeGeneratedImages({
       images,
       prompt,
-      model,
+      profileId: profile.id,
+      model: profile.model,
       preset: preset.value,
       imageSize: size.value,
       seed,
@@ -323,7 +338,8 @@ export async function POST(req: Request) {
       images: items.map((item) => item.src),
       items,
       options: {
-        model,
+        profileId: profile.id,
+        model: profile.model,
         preset: preset.value,
         size: size.value,
         seed: seed ?? null,

@@ -1,0 +1,21 @@
+{
+  "activeProfile": "krea-2-turbo",
+  "profiles": [
+    {
+      "id": "krea-2-turbo",
+      "label": "Krea 2 Turbo",
+      "baseUrl": "http://localhost:30000/v1",
+      "apiKeyEnv": "SGLANG_API_KEY",
+      "model": "krea/Krea-2-Turbo",
+      "promptFormat": "text",
+      "timeoutMs": 120000,
+      "sizes": ["1024x1024", "1536x1536", "2048x2048"],
+      "defaultSize": "1024x1024",
+      "presets": [],
+      "extraBody": {
+        "num_inference_steps": 8,
+        "guidance_scale": 1.0
+      }
+    }
+  ]
+}

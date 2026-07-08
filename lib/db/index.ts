@@ -31,23 +31,35 @@ export function getDb() {
 
 export async function ensureDatabase() {
   if (!globalForDb.lumihooDbReady) {
-    globalForDb.lumihooDbReady = getDb().execute(sql`
-      CREATE TABLE IF NOT EXISTS generated_images (
-        id uuid PRIMARY KEY,
-        prompt text NOT NULL,
-        bucket text NOT NULL,
-        object_key text NOT NULL UNIQUE,
-        public_url text NOT NULL,
-        content_type text NOT NULL,
-        size_bytes bigint NOT NULL,
-        model text NOT NULL,
-        preset text NOT NULL,
-        image_size text NOT NULL,
-        seed bigint,
-        etag text,
-        created_at timestamptz NOT NULL DEFAULT now()
-      )
-    `).then(() => undefined)
+    globalForDb.lumihooDbReady = (async () => {
+      const db = getDb()
+      await db.execute(sql`
+        CREATE TABLE IF NOT EXISTS generated_images (
+          id uuid PRIMARY KEY,
+          prompt text NOT NULL,
+          bucket text NOT NULL,
+          object_key text NOT NULL UNIQUE,
+          public_url text NOT NULL,
+          content_type text NOT NULL,
+          size_bytes bigint NOT NULL,
+          profile_id text NOT NULL DEFAULT 'legacy',
+          model text NOT NULL,
+          preset text,
+          image_size text NOT NULL,
+          seed bigint,
+          etag text,
+          created_at timestamptz NOT NULL DEFAULT now()
+        )
+      `)
+      await db.execute(sql`
+        ALTER TABLE generated_images
+        ADD COLUMN IF NOT EXISTS profile_id text NOT NULL DEFAULT 'legacy'
+      `)
+      await db.execute(sql`
+        ALTER TABLE generated_images
+        ALTER COLUMN preset DROP NOT NULL
+      `)
+    })()
   }
 
   await globalForDb.lumihooDbReady

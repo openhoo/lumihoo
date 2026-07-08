@@ -32,6 +32,27 @@ type GeneratedImageItem = {
   src: string
 }
 
+type GenerationOption = {
+  value: string
+  label: string
+}
+
+type GenerationControls = {
+  count: {
+    values: number[]
+    default: number
+  }
+  presets: GenerationOption[]
+  defaultPreset: string | null
+  sizes: GenerationOption[]
+  defaultSize: string
+  seed: {
+    supported: boolean
+    default: number | null
+  }
+  maxPromptLength: number
+}
+
 const COUNTS = [1, 2, 3, 4]
 
 const PRESET_OPTIONS = [
@@ -45,14 +66,92 @@ const SIZE_OPTIONS = [
   { value: '2048x2048', label: '2048' },
 ] as const
 
-type IdeogramPreset = (typeof PRESET_OPTIONS)[number]['value']
-type ImageSize = (typeof SIZE_OPTIONS)[number]['value']
+const FALLBACK_CONTROLS: GenerationControls = {
+  count: {
+    values: COUNTS,
+    default: 1,
+  },
+  presets: PRESET_OPTIONS.map((option) => ({ ...option })),
+  defaultPreset: 'V4_QUALITY_48',
+  sizes: SIZE_OPTIONS.map((option) => ({ ...option })),
+  defaultSize: '1024x1024',
+  seed: {
+    supported: true,
+    default: null,
+  },
+  maxPromptLength: 2000,
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeOptions(value: unknown) {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .filter(isRecord)
+    .map((option) => {
+      const optionValue = typeof option.value === 'string' ? option.value : ''
+      const label = typeof option.label === 'string' && option.label.trim() ? option.label : optionValue
+      return optionValue ? { value: optionValue, label } : null
+    })
+    .filter((option): option is GenerationOption => Boolean(option))
+}
+
+function normalizeControls(value: unknown): GenerationControls | null {
+  if (!isRecord(value)) return null
+
+  const sizes = normalizeOptions(value.sizes)
+  if (sizes.length === 0) return null
+
+  const presets = normalizeOptions(value.presets)
+  const defaultSize = typeof value.defaultSize === 'string' ? value.defaultSize : sizes[0].value
+  if (!sizes.some((sizeOption) => sizeOption.value === defaultSize)) return null
+
+  const defaultPreset = typeof value.defaultPreset === 'string' ? value.defaultPreset : null
+  if (defaultPreset && !presets.some((presetOption) => presetOption.value === defaultPreset)) return null
+
+  const countRecord = isRecord(value.count) ? value.count : null
+  const countValues = Array.isArray(countRecord?.values)
+    ? countRecord.values.filter((count): count is number => Number.isSafeInteger(count) && count > 0)
+    : COUNTS
+  const rawDefaultCount = countRecord?.default
+  const defaultCount = Number.isSafeInteger(rawDefaultCount) && countValues.includes(rawDefaultCount as number)
+    ? (rawDefaultCount as number)
+    : countValues[0] || 1
+
+  const seedRecord = isRecord(value.seed) ? value.seed : null
+  const defaultSeed = Number.isSafeInteger(seedRecord?.default) && Number(seedRecord?.default) >= 0
+    ? Number(seedRecord?.default)
+    : null
+  const maxPromptLength = Number.isSafeInteger(value.maxPromptLength) && Number(value.maxPromptLength) > 0
+    ? Number(value.maxPromptLength)
+    : 2000
+
+  return {
+    count: {
+      values: countValues.length > 0 ? countValues : COUNTS,
+      default: defaultCount,
+    },
+    presets,
+    defaultPreset,
+    sizes,
+    defaultSize,
+    seed: {
+      supported: seedRecord?.supported !== false,
+      default: defaultSeed,
+    },
+    maxPromptLength,
+  }
+}
 
 export function LumihooApp() {
+  const [controls, setControls] = useState<GenerationControls>(FALLBACK_CONTROLS)
   const [prompt, setPrompt] = useState('')
-  const [count, setCount] = useState(1)
-  const [preset, setPreset] = useState<IdeogramPreset>('V4_TURBO_12')
-  const [size, setSize] = useState<ImageSize>('1024x1024')
+  const [count, setCount] = useState(FALLBACK_CONTROLS.count.default)
+  const [preset, setPreset] = useState<string | null>(FALLBACK_CONTROLS.defaultPreset)
+  const [size, setSize] = useState(FALLBACK_CONTROLS.defaultSize)
   const [seed, setSeed] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -60,6 +159,44 @@ export function LumihooApp() {
   const [gallery, setGallery] = useState<GalleryItem[]>([])
   const [lightbox, setLightbox] = useState<GalleryItem | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+
+    async function loadControls() {
+      try {
+        const res = await fetch('/api/generate')
+        const data = await res.json().catch(() => null) as { error?: string } | null
+        if (!res.ok) throw new Error(data?.error || 'Unable to load generation profile.')
+
+        const nextControls = normalizeControls(data)
+        if (!nextControls) throw new Error('Unable to load generation profile.')
+        if (cancelled) return
+
+        setControls(nextControls)
+        setCount((current) => nextControls.count.values.includes(current) ? current : nextControls.count.default)
+        setPreset((current) => (
+          current && nextControls.presets.some((option) => option.value === current)
+            ? current
+            : nextControls.defaultPreset
+        ))
+        setSize((current) => (
+          nextControls.sizes.some((option) => option.value === current)
+            ? current
+            : nextControls.defaultSize
+        ))
+        setSeed((current) => current || (nextControls.seed.default === null ? '' : String(nextControls.seed.default)))
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Unable to load generation profile.')
+      }
+    }
+
+    loadControls()
+
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   const generate = useCallback(async () => {
     const trimmed = prompt.trim()
@@ -69,16 +206,18 @@ export function LumihooApp() {
     setResults([])
 
     try {
+      const requestBody: Record<string, unknown> = {
+        prompt: trimmed,
+        count,
+        size,
+        seed: seed.trim() ? Number(seed) : undefined,
+      }
+      if (preset) requestBody.preset = preset
+
       const res = await fetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          prompt: trimmed,
-          count,
-          preset,
-          size,
-          seed: seed.trim() ? Number(seed) : undefined,
-        }),
+        body: JSON.stringify(requestBody),
       })
       const data = (await res.json()) as {
         images?: unknown
@@ -156,7 +295,7 @@ export function LumihooApp() {
             onChange={(e) => setPrompt(e.target.value)}
             onKeyDown={handleKeyDown}
             rows={2}
-            maxLength={2000}
+            maxLength={controls.maxPromptLength}
             placeholder="Describe what the owl should see…"
             disabled={isGenerating}
             className="w-full resize-none bg-transparent px-5 pt-4 text-base leading-relaxed text-foreground placeholder:text-muted-foreground focus:outline-none disabled:opacity-60"
@@ -165,23 +304,25 @@ export function LumihooApp() {
           <div className="flex flex-wrap items-center justify-between gap-2 px-3 pb-3">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
               <CountSelector count={count} onChange={setCount} disabled={isGenerating} />
-              <OptionMenu
-                label="Preset"
-                icon={Gauge}
-                value={preset}
-                options={PRESET_OPTIONS}
-                onChange={setPreset}
-                disabled={isGenerating}
-              />
+              {controls.presets.length > 0 && preset && (
+                <OptionMenu
+                  label="Preset"
+                  icon={Gauge}
+                  value={preset}
+                  options={controls.presets}
+                  onChange={(value) => setPreset(value)}
+                  disabled={isGenerating}
+                />
+              )}
               <OptionMenu
                 label="Size"
                 icon={Ruler}
                 value={size}
-                options={SIZE_OPTIONS}
+                options={controls.sizes}
                 onChange={setSize}
                 disabled={isGenerating}
               />
-              <SeedInput seed={seed} onChange={setSeed} disabled={isGenerating} />
+              {controls.seed.supported && <SeedInput seed={seed} onChange={setSeed} disabled={isGenerating} />}
             </div>
             <button
               type="button"
